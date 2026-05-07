@@ -157,8 +157,11 @@ nav{display:flex;align-items:center;justify-content:space-between;padding:0 22px
 // ══════════════════════════════════════════════════════════════════════════════
 const JSONBIN_KEY  = '$2a$10$wG6u5Kgiue9nTE6dkp5lsOpnNeUDsmMs4M/JLTybqbc21PEZVtdyu';
 const JSONBIN_URL  = 'https://api.jsonbin.io/v3/b';
-const BIN_IDS_KEY  = 'tic_bin_ids_v1'; // localStorage guarda los IDs de bins creados
+const BIN_IDS_KEY  = 'tic_bin_ids_v1';
 const ADMIN_PASS   = 'compras2024';
+// IDs fijos — todos los dispositivos usan los mismos bins
+const FIXED_BIN_SOL = '69fc9ac1250b1311c318d329';
+const FIXED_BIN_OC  = '69fc9ad3250b1311c318d394';
 
 // ── Steps & Equipment ──
 const STEPS = [
@@ -230,22 +233,9 @@ async function updateBin(id, data){
 }
 
 async function initBins(){
-  const ids = getBinIds();
-  BIN_SOL = ids.sol || null;
-  BIN_OC  = ids.oc  || null;
-
-  if(!BIN_SOL){
-    showLoading('Configurando base de datos por primera vez...');
-    BIN_SOL = await createBin('tic-solicitudes', {solicitudes:[]});
-    ids.sol = BIN_SOL;
-    saveBinIds(ids);
-  }
-  if(!BIN_OC){
-    BIN_OC = await createBin('tic-ordenes-compra', {ordenes:{}});
-    ids.oc = BIN_OC;
-    saveBinIds(ids);
-  }
-  hideLoading();
+  // Usar siempre los bins fijos — mismo dato en todos los dispositivos
+  BIN_SOL = FIXED_BIN_SOL;
+  BIN_OC  = FIXED_BIN_OC;
 }
 
 // ── In-memory cache to reduce API calls ──
