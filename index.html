@@ -10,7 +10,7 @@
 <script src="https://cdn.jsdelivr.net/npm/@emailjs/browser@4/dist/email.min.js"></script>
 <script>
 if('scrollRestoration' in history) history.scrollRestoration = 'manual';
-const APP_VERSION = 'v2026.05.15-b17';
+const APP_VERSION = 'v2026.05.15-b18';
 if('scrollRestoration' in history) history.scrollRestoration = 'manual';
   document.addEventListener('DOMContentLoaded', function() {
     emailjs.init({ publicKey: 'ySm-i1W3QcfSZ7nLx' });
@@ -33,6 +33,7 @@ h1,h2,h3,h4{font-family:'Syne',sans-serif}
 input,select,textarea{font-family:'DM Sans',sans-serif}
 @keyframes fadeUp{from{opacity:0;transform:translateY(14px)}to{opacity:1;transform:translateY(0)}}
 .fu{animation:fadeUp .32s ease both}
+@keyframes pulse{0%,100%{opacity:1}50%{opacity:.4}}
 @keyframes spin{to{transform:rotate(360deg)}}
 .spinner{display:inline-block;width:18px;height:18px;border:2px solid var(--border);border-top-color:var(--accent);border-radius:50%;animation:spin .7s linear infinite;vertical-align:middle}
 
@@ -173,7 +174,7 @@ input[type=number]{-moz-appearance:textfield}
 </head>
 <body>
 
-<div style="position:fixed;bottom:10px;left:10px;z-index:99999;background:#141920cc;border:1px solid #3b9eff44;border-radius:8px;padding:4px 10px;font-size:11px;font-family:monospace;color:#3b9eff;pointer-events:none">v2026.05.15-b17</div>
+<div style="position:fixed;bottom:10px;left:10px;z-index:99999;background:#141920cc;border:1px solid #3b9eff44;border-radius:8px;padding:4px 10px;font-size:11px;font-family:monospace;color:#3b9eff;pointer-events:none">v2026.05.15-b18</div>
 
 <div id="toast"></div>
 <div id="loading-overlay" style="display:none">
@@ -1570,6 +1571,7 @@ function renderAdmin(){
         
         ${btn('↻','btn btn-ghost btn-sm','do-refresh')}
         ${btn('Sincronizar nube','btn btn-ghost btn-sm','do-sync','font-size:11px')}
+        <span id="notif-status" style="font-size:10px;color:var(--muted);display:flex;align-items:center;gap:4px"><span style="width:7px;height:7px;border-radius:50%;background:var(--success);display:inline-block;animation:pulse 2s infinite"></span>Alertas activas</span>
         ${btn('⚙️ Parametrización','btn btn-ghost btn-sm','do-params','font-size:11px')}
         ${btn('Salir','btn btn-danger btn-sm','do-logout')}
       </div>
@@ -1811,6 +1813,8 @@ function attachEvents(){
       STATE.ordenes = {};
       document.getElementById('app').innerHTML = renderAdmin();
       attachEvents();
+      startNotifPolling();
+      clearTitleBadge();
       // Load data after render
       getSolicitudes().then(sols=>{
         STATE.solicitudes=sols;
@@ -1886,7 +1890,7 @@ function attachEvents(){
     render();
   });
   document.getElementById('do-logout')?.addEventListener('click',()=>{
-    sessionStorage.removeItem('tic_adm');
+    stopNotifPolling(); clearTitleBadge(); sessionStorage.removeItem('tic_adm');
     setState({adminAuth:false,selectedId:null});
   });
 
@@ -2590,7 +2594,117 @@ function reloadParamsList(){
 }
 
 
+
+// ══ NOTIFICATION SYSTEM ══════════════════════════════════════════════════════
+let _lastSolCount = null;
+let _notifInterval = null;
+let _notifGranted  = false;
+
+function requestNotifPermission(){
+  if(!('Notification' in window)) return;
+  if(Notification.permission === 'granted'){
+    _notifGranted = true;
+  } else if(Notification.permission !== 'denied'){
+    Notification.requestPermission().then(p=>{
+      _notifGranted = p === 'granted';
+    });
+  }
+}
+
+function playNotifSound(){
+  try{
+    const ctx = new (window.AudioContext||window.webkitAudioContext)();
+    const osc = ctx.createOscillator();
+    const gain = ctx.createGain();
+    osc.connect(gain); gain.connect(ctx.destination);
+    osc.frequency.setValueAtTime(880, ctx.currentTime);
+    osc.frequency.setValueAtTime(1100, ctx.currentTime+0.1);
+    osc.frequency.setValueAtTime(880, ctx.currentTime+0.2);
+    gain.gain.setValueAtTime(0.3, ctx.currentTime);
+    gain.gain.exponentialRampToValueAtTime(0.001, ctx.currentTime+0.5);
+    osc.start(ctx.currentTime);
+    osc.stop(ctx.currentTime+0.5);
+  }catch(e){}
+}
+
+function showNotification(nuevas){
+  const n = nuevas.length;
+  const titulo = n===1
+    ? `📋 Nueva solicitud de ${nuevas[0].requester?.name||'desconocido'}`
+    : `📋 ${n} nuevas solicitudes`;
+  const cuerpo = n===1
+    ? `${nuevas[0].id} · ${nuevas[0].requester?.company||''} · ${(nuevas[0].items||[]).map(i=>i.type).join(', ')}`
+    : nuevas.map(r=>r.id+' — '+r.requester?.name).join('\n');
+
+  // Browser notification
+  if(_notifGranted && Notification.permission==='granted'){
+    const notif = new Notification(titulo, {
+      body: cuerpo,
+      icon: 'https://yefersonhardwareitm.github.io/solicitudes-compra-tic/favicon.ico',
+      badge: 'https://yefersonhardwareitm.github.io/solicitudes-compra-tic/favicon.ico',
+      tag: 'tic-nueva-solicitud',
+      requireInteraction: true
+    });
+    notif.onclick = ()=>{ window.focus(); notif.close(); };
+  }
+
+  // In-page toast
+  showToast(titulo, 'info');
+  playNotifSound();
+
+  // Update page title with badge
+  updateTitleBadge(n);
+}
+
+let _titleBadge = 0;
+function updateTitleBadge(n){
+  _titleBadge += n;
+  if(_titleBadge > 0){
+    document.title = `(${_titleBadge}) SolicitudTIC — Panel de Compras`;
+  }
+}
+function clearTitleBadge(){
+  _titleBadge = 0;
+  document.title = 'SolicitudTIC — Dpto. de Tecnología';
+}
+
+async function checkForNewSolicitudes(){
+  if(!STATE.adminAuth) return;
+  try{
+    CACHE_SOL = null;
+    const sols = await getSolicitudes();
+    if(_lastSolCount === null){
+      _lastSolCount = sols.length;
+      return;
+    }
+    if(sols.length > _lastSolCount){
+      const nuevas = sols.slice(_lastSolCount); // newest are at end
+      _lastSolCount = sols.length;
+      STATE.solicitudes = sols;
+      showNotification(nuevas);
+      // Refresh sidebar silently
+      refreshSidebar();
+    }
+  }catch(e){ /* silent */ }
+}
+
+function startNotifPolling(){
+  requestNotifPermission();
+  if(_notifInterval) clearInterval(_notifInterval);
+  _notifInterval = setInterval(checkForNewSolicitudes, 30000); // every 30 sec
+  // First check after 5 seconds
+  setTimeout(()=>{ _lastSolCount = STATE.solicitudes.length; }, 5000);
+}
+
+function stopNotifPolling(){
+  if(_notifInterval){ clearInterval(_notifInterval); _notifInterval=null; }
+}
+
 async function boot(){
+  // Clear badge when user returns to tab
+  document.addEventListener('visibilitychange',()=>{
+    if(!document.hidden && STATE.adminAuth) clearTitleBadge();
+  });
   // Auto-buscar si viene desde link del correo
   const urlParams = new URLSearchParams(window.location.search);
   const buscarId = urlParams.get('buscar');
