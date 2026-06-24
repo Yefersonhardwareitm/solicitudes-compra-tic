@@ -24,7 +24,7 @@ function toggleTheme(){ setTheme(getTheme()==='dark'?'light':'dark'); }
 document.documentElement.setAttribute('data-theme', getTheme());
 // ─────────────────────────────────────────────────────────────────────────
 if('scrollRestoration' in history) history.scrollRestoration = 'manual';
-const APP_VERSION = 'v2026.06.05-b70';
+const APP_VERSION = 'v2026.06.05-b71';
 if('scrollRestoration' in history) history.scrollRestoration = 'manual';
   document.addEventListener('DOMContentLoaded', function() {
     emailjs.init({ publicKey: 'ySm-i1W3QcfSZ7nLx' });
@@ -675,7 +675,8 @@ function hideLoading(){ document.getElementById('loading-overlay').style.display
 // ══════════════════════════════════════════════════════════════════════════════
 const STATE = {
   mode: new URLSearchParams(window.location.search).get('modo')==='compras'?'admin':new URLSearchParams(window.location.search).get('modo')==='tic'?'tic':'public',
-  ticView: 'home', // 'home' | 'inventario' | 'actas'
+  ticView: 'home', // 'home' | 'inventario' | 'actas' | 'hdv'
+  ticHdv: null,   // {solId, ocKey, tab:'general'|'hardware'|'software'|'cierre', data:{}}
   publicTab: 'form',
   adminAuth: sessionStorage.getItem('tic_adm')==='1',
   currentUser: JSON.parse(sessionStorage.getItem('tic_user')||'null'),
@@ -7322,6 +7323,8 @@ function renderTIC(){
     mainContent = renderTICInventario();
   } else if(view === 'actas'){
     mainContent = renderTICActas();
+  } else if(view === 'hdv'){
+    mainContent = renderHojaDeVida();
   }
 
   // sidebar ya tiene su propio div interno — lo incluimos directo
@@ -7410,11 +7413,43 @@ function attachTICEvents(){
       render();
     });
   });
+
+  // Tabs HdV
+  document.querySelectorAll('[data-hdv-tab]').forEach(btn => {
+    btn.addEventListener('click', () => {
+      hdvSaveCurrentTab();
+      STATE.ticHdv.tab = btn.dataset.hdvTab;
+      render();
+    });
+  });
+
+  // Botón guardar HdV
+  document.getElementById('hdv-save-btn')?.addEventListener('click', () => {
+    hdvSaveCurrentTab();
+    const d = STATE.ticHdv?.data || {};
+    if(!d.nroInventario){ showToast('⚠️ Ingresa el Nro. de Inventario','info'); STATE.ticHdv.tab='general'; render(); return; }
+    if(!d.serial){ showToast('⚠️ El Serial del equipo es obligatorio','info'); STATE.ticHdv.tab='hardware'; render(); return; }
+    showToast('✅ Hoja de vida guardada — generando documentos...','ok');
+    // TODO: guardar en Supabase y generar PDF
+  });
 }
 
 function crearHojaDeVida(solId, ocKey){
-  showToast('📄 Módulo Hoja de Vida en desarrollo — próximamente','info');
-  // TODO: abrir formulario de hoja de vida para este equipo
+  STATE.ticView = 'hdv';
+  STATE.ticHdv  = {
+    solId, ocKey,
+    tab: 'general',
+    data: {
+      nroInventario:'', fechaAdquisicion:'', garantia:'1',
+      marca:'', serial:'', procesador:'', ram:'', disco:'', serialCargador:'',
+      macWifi:'', macEth:'', ipWifi:'DHCP', ipEth:'DHCP', hostname:'',
+      dvd:false, tecladoExt:false, mouseExt:false,
+      software:[], softwareOtros:'',
+      estadoEquipo:'Nuevo',
+      observaciones:'SE REALIZA ENTREGA DE COMPUTADOR EN OPTIMAS CONDICIONES DE FUNCIONAMIENTO, DEBIDAMENTE CONFIGURADO Y VERIFICADO PARA SU USO. EL EQUIPO QUEDA BAJO SU CUSTODIA Y RESPONSABILIDAD.',
+    }
+  };
+  render();
 }
 
 function buscarInventarioTIC(){
@@ -7476,6 +7511,287 @@ function filtrarActasTIC(q){
 function verActaTIC(solId, ocKey){
   // Navegar al panel de compras con la solicitud abierta
   window.location.href = '?modo=compras&sel='+solId;
+}
+
+
+
+// ══════════════════════════════════════════════════════════════════════════════
+// HOJA DE VIDA — FORMULARIO
+// ══════════════════════════════════════════════════════════════════════════════
+
+function calcVencGarantia(fecha, anos){
+  if(!fecha || !anos) return '—';
+  const d = new Date(fecha);
+  d.setFullYear(d.getFullYear() + parseInt(anos));
+  return d.toLocaleDateString('es-CO',{day:'2-digit',month:'long',year:'numeric'});
+}
+
+function renderHojaDeVida(){
+  const hdv   = STATE.ticHdv || {};
+  const sol   = (STATE.solicitudes||[]).find(s => s.id === hdv.solId);
+  const oc    = (STATE.ordenes||{})[hdv.ocKey];
+  const data  = hdv.data || {};
+  const tab   = hdv.tab || 'general';
+
+  // Datos de compras para el bloque de solo lectura
+  const req       = sol?.requester || {};
+  const ocItems   = (oc?.items||[]).filter(it=>it.descripcion&&parseFloat(it.cantidad)>0);
+  const elemento  = ocItems[0]?.descripcion || sol?.items?.[0]?.type || '—';
+  const cantidad  = ocItems[0]?.cantidad || 1;
+  const recep     = sol?.items?.[0]?.receptor || req;
+  const paraQuien = recep?.name || req.name || '—';
+  const cargo     = recep?.position || req.position || '—';
+  const area      = recep?.area || req.area || '—';
+  const motivo    = sol?.items?.[0]?.motivo || sol?.motive || '—';
+
+  // ── Bloque de solo lectura ─────────────────────────────────────────────────
+  const readonlyBlock = `
+    <div style="background:#1e293b;border:1px solid #334155;border-radius:12px;padding:18px 20px;margin-bottom:22px">
+      <div style="display:flex;align-items:center;gap:8px;margin-bottom:14px">
+        <span style="font-size:14px">🔒</span>
+        <span style="font-size:11px;font-weight:700;color:#64748b;text-transform:uppercase;letter-spacing:.5px">Datos de Compras — Solo lectura</span>
+      </div>
+      <div style="display:grid;grid-template-columns:repeat(4,1fr);gap:10px">
+        ${[
+          ['Razón Social',  req.company||'—'],
+          ['Sede',          req.sede||recep?.sede||'—'],
+          ['Elemento',      elemento],
+          ['Cantidad',      cantidad],
+          ['Para quién va', paraQuien],
+          ['Cargo',         cargo],
+          ['Área',          area],
+          ['Motivo',        motivo],
+        ].map(([l,v])=>`
+          <div style="background:#0f172a;border-radius:8px;padding:10px 12px">
+            <p style="font-size:10px;color:#64748b;text-transform:uppercase;letter-spacing:.4px;margin:0 0 3px">${l}</p>
+            <p style="font-size:13px;font-weight:600;color:#e2e8f0;margin:0;white-space:nowrap;overflow:hidden;text-overflow:ellipsis" title="${escH(String(v))}">${escH(String(v))}</p>
+          </div>`).join('')}
+      </div>
+    </div>`;
+
+  // ── Tabs ──────────────────────────────────────────────────────────────────
+  const tabs = [
+    {id:'general',  icon:'📋', label:'Info General y Garantía'},
+    {id:'hardware', icon:'💻', label:'Hardware y Red'},
+    {id:'software', icon:'⚙️', label:'Software Instalado'},
+    {id:'cierre',   icon:'✅', label:'Cierre de Acta'},
+  ];
+
+  const tabBar = `
+    <div style="display:flex;gap:4px;border-bottom:2px solid #1e293b;margin-bottom:20px">
+      ${tabs.map(t=>`
+        <button data-hdv-tab="${t.id}"
+          style="padding:10px 18px;border:none;cursor:pointer;font-size:13px;font-weight:600;
+            border-bottom:2px solid ${tab===t.id?'#3b82f6':'transparent'};
+            margin-bottom:-2px;
+            background:transparent;
+            color:${tab===t.id?'#3b82f6':'#64748b'};
+            font-family:inherit;transition:all .15s;display:flex;align-items:center;gap:6px">
+          <span>${t.icon}</span>${t.label}
+        </button>`).join('')}
+    </div>`;
+
+  // ── Pestaña 1: General y Garantía ─────────────────────────────────────────
+  const vencGar = calcVencGarantia(data.fechaAdquisicion, data.garantia);
+  const tabGeneral = `
+    <div style="display:grid;grid-template-columns:1fr 1fr 1fr;gap:16px">
+      <div class="field">
+        <label style="font-size:11px;font-weight:700;color:#94a3b8;text-transform:uppercase;letter-spacing:.4px;display:block;margin-bottom:6px">Nro. Inventario<span style="color:#ef4444">*</span></label>
+        <input class="inp" id="hdv_nroInventario" value="${escH(data.nroInventario||'')}" placeholder="ITM-000-878" style="width:100%;box-sizing:border-box"/>
+      </div>
+      <div class="field">
+        <label style="font-size:11px;font-weight:700;color:#94a3b8;text-transform:uppercase;letter-spacing:.4px;display:block;margin-bottom:6px">Fecha de Adquisición<span style="color:#ef4444">*</span></label>
+        <input class="inp" id="hdv_fechaAdquisicion" type="date" value="${escH(data.fechaAdquisicion||'')}" onchange="hdvRecalcGarantia()" style="width:100%;box-sizing:border-box"/>
+      </div>
+      <div class="field">
+        <label style="font-size:11px;font-weight:700;color:#94a3b8;text-transform:uppercase;letter-spacing:.4px;display:block;margin-bottom:6px">Tiempo de Garantía</label>
+        <select class="sel" id="hdv_garantia" onchange="hdvRecalcGarantia()" style="width:100%;box-sizing:border-box">
+          ${['1','2','3','5'].map(y=>`<option value="${y}" ${data.garantia===y?'selected':''}>${y} año${y>1?'s':''}</option>`).join('')}
+        </select>
+      </div>
+    </div>
+    <div id="hdv_venc_display" style="margin-top:14px;padding:12px 16px;background:#0f172a;border:1px solid #1e293b;border-radius:10px;display:flex;align-items:center;gap:10px">
+      <span style="font-size:18px">📅</span>
+      <div>
+        <p style="font-size:10px;color:#64748b;text-transform:uppercase;letter-spacing:.4px;margin:0 0 2px">Fecha de Vencimiento de Garantía</p>
+        <p id="hdv_venc_text" style="font-size:15px;font-weight:700;color:${data.fechaAdquisicion?'#34d399':'#475569'};margin:0">${data.fechaAdquisicion?vencGar:'— Selecciona fecha y garantía —'}</p>
+      </div>
+    </div>`;
+
+  // ── Pestaña 2: Hardware y Red ──────────────────────────────────────────────
+  const tabHardware = `
+    <div style="display:grid;grid-template-columns:1fr 1fr;gap:24px">
+      <!-- Columna Hardware -->
+      <div>
+        <p style="font-size:11px;font-weight:700;color:#3b82f6;text-transform:uppercase;letter-spacing:.5px;margin:0 0 12px;display:flex;align-items:center;gap:6px"><span>💻</span> Hardware</p>
+        ${[
+          ['hdv_marca',          'Marca / Modelo',    'Dell Latitude 5540', false],
+          ['hdv_serial',         'Serial / S/N',      'SN123456789',        true ],
+          ['hdv_procesador',     'Procesador',        'Intel Core i5-1335U',false],
+          ['hdv_ram',            'Memoria RAM',       '8 GB DDR4',          false],
+          ['hdv_disco',          'Disco Duro',        '512 GB SSD NVMe',    false],
+          ['hdv_serialCargador', 'Serial del Cargador','SN-CARG-001',       false],
+        ].map(([id,label,ph,req])=>`
+          <div style="margin-bottom:12px">
+            <label style="font-size:11px;font-weight:600;color:#94a3b8;display:block;margin-bottom:4px">${label}${req?'<span style="color:#ef4444">*</span>':''}</label>
+            <input class="inp" id="${id}" value="${escH(data[id.replace('hdv_','')]||'')}" placeholder="${ph}" style="width:100%;box-sizing:border-box"/>
+          </div>`).join('')}
+        <!-- Accesorios -->
+        <p style="font-size:11px;font-weight:700;color:#94a3b8;text-transform:uppercase;letter-spacing:.4px;margin:16px 0 10px">Accesorios adicionales</p>
+        ${[
+          ['hdv_dvd',        'dvd',        'Unidad de DVD'],
+          ['hdv_tecladoExt', 'tecladoExt', 'Teclado Externo'],
+          ['hdv_mouseExt',   'mouseExt',   'Mouse Externo'],
+        ].map(([id,key,label])=>`
+          <label style="display:flex;align-items:center;gap:10px;cursor:pointer;padding:8px 10px;background:#0f172a;border-radius:8px;margin-bottom:6px;border:1px solid ${data[key]?'#3b82f6':'#1e293b'}">
+            <input type="checkbox" id="${id}" ${data[key]?'checked':''} style="width:15px;height:15px;accent-color:#3b82f6;cursor:pointer"/>
+            <span style="font-size:13px;color:#e2e8f0">${label}</span>
+            ${data[key]?'<span style="margin-left:auto;font-size:10px;color:#64748b">NO APLICA</span>':''}
+          </label>`).join('')}
+      </div>
+      <!-- Columna Red -->
+      <div>
+        <p style="font-size:11px;font-weight:700;color:#06b6d4;text-transform:uppercase;letter-spacing:.5px;margin:0 0 12px;display:flex;align-items:center;gap:6px"><span>🌐</span> Red</p>
+        ${[
+          ['hdv_macWifi',  'MAC WiFi',      'AA:BB:CC:DD:EE:FF', ''],
+          ['hdv_macEth',   'MAC Ethernet',  'AA:BB:CC:DD:EE:FF', ''],
+          ['hdv_ipWifi',   'IP WiFi',       'DHCP',              data.ipWifi||'DHCP'],
+          ['hdv_ipEth',    'IP Ethernet',   'DHCP',              data.ipEth||'DHCP'],
+          ['hdv_hostname', 'Hostname',      'ITM-NB-001',        ''],
+        ].map(([id,label,ph,val])=>`
+          <div style="margin-bottom:12px">
+            <label style="font-size:11px;font-weight:600;color:#94a3b8;display:block;margin-bottom:4px">${label}</label>
+            <input class="inp" id="${id}" value="${escH(val||data[id.replace('hdv_','')]||'')}" placeholder="${ph}" style="width:100%;box-sizing:border-box"/>
+          </div>`).join('')}
+      </div>
+    </div>`;
+
+  // ── Pestaña 3: Software ────────────────────────────────────────────────────
+  const swList = ['Paquete Office 365','Google Chrome','Mozilla Firefox','Adobe Acrobat Reader','AnyDesk','TeamViewer','WinRAR','PDF24','VLC Media Player','Foxit Reader'];
+  const tabSoftware = `
+    <p style="font-size:11px;font-weight:700;color:#94a3b8;text-transform:uppercase;letter-spacing:.4px;margin:0 0 12px">Software Estándar</p>
+    <div style="display:grid;grid-template-columns:1fr 1fr;gap:8px;margin-bottom:20px">
+      ${swList.map(sw=>`
+        <label style="display:flex;align-items:center;gap:10px;cursor:pointer;padding:10px 12px;background:#0f172a;border-radius:8px;border:1px solid ${(data.software||[]).includes(sw)?'#3b82f6':'#1e293b'};transition:border-color .15s">
+          <input type="checkbox" data-sw="${escH(sw)}" ${(data.software||[]).includes(sw)?'checked':''} style="width:15px;height:15px;accent-color:#3b82f6;cursor:pointer"/>
+          <span style="font-size:13px;color:#e2e8f0">${escH(sw)}</span>
+        </label>`).join('')}
+    </div>
+    <p style="font-size:11px;font-weight:700;color:#94a3b8;text-transform:uppercase;letter-spacing:.4px;margin:0 0 8px">Software Especial / Otros</p>
+    <textarea class="ta" id="hdv_softwareOtros" rows="4" placeholder="AutoCAD 2024, Microsoft Project, Visio, Antivirus corporativo..."
+      style="width:100%;box-sizing:border-box;resize:vertical">${escH(data.softwareOtros||'')}</textarea>`;
+
+  // ── Pestaña 4: Cierre de Acta ──────────────────────────────────────────────
+  const tabCierre = `
+    <div style="margin-bottom:20px">
+      <p style="font-size:11px;font-weight:700;color:#94a3b8;text-transform:uppercase;letter-spacing:.4px;margin:0 0 12px">Estado del Equipo</p>
+      <div style="display:flex;gap:12px">
+        ${['Nuevo','Usado'].map(opt=>`
+          <label style="display:flex;align-items:center;gap:10px;cursor:pointer;padding:14px 24px;background:#0f172a;border-radius:10px;border:2px solid ${data.estadoEquipo===opt?'#3b82f6':'#1e293b'};flex:1;transition:all .15s">
+            <input type="radio" name="hdv_estadoEquipo" value="${opt}" ${data.estadoEquipo===opt?'checked':''} style="width:16px;height:16px;accent-color:#3b82f6;cursor:pointer"/>
+            <div>
+              <p style="font-size:14px;font-weight:700;color:#e2e8f0;margin:0">${opt}</p>
+              <p style="font-size:11px;color:#64748b;margin:0">${opt==='Nuevo'?'Sin uso previo, caja original':'Equipo reacondicionado o reposición'}</p>
+            </div>
+          </label>`).join('')}
+      </div>
+    </div>
+    <div>
+      <p style="font-size:11px;font-weight:700;color:#94a3b8;text-transform:uppercase;letter-spacing:.4px;margin:0 0 8px">Observaciones del Acta</p>
+      <textarea class="ta" id="hdv_observaciones" rows="6"
+        style="width:100%;box-sizing:border-box;resize:vertical;line-height:1.6">${escH(data.observaciones||'SE REALIZA ENTREGA DE COMPUTADOR EN OPTIMAS CONDICIONES DE FUNCIONAMIENTO, DEBIDAMENTE CONFIGURADO Y VERIFICADO PARA SU USO. EL EQUIPO QUEDA BAJO SU CUSTODIA Y RESPONSABILIDAD.')}</textarea>
+    </div>`;
+
+  const tabContent = tab==='general'?tabGeneral:tab==='hardware'?tabHardware:tab==='software'?tabSoftware:tabCierre;
+
+  return `
+    <!-- Header -->
+    <div style="padding:16px 28px;border-bottom:1px solid var(--border);display:flex;align-items:center;gap:12px;flex-shrink:0;background:var(--bg)">
+      <button onclick="STATE.ticView='home';render()"
+        style="padding:7px 12px;background:transparent;border:1px solid var(--border);border-radius:8px;cursor:pointer;color:var(--text3);font-size:13px;font-family:inherit">
+        ← Volver
+      </button>
+      <div>
+        <h1 style="font-size:18px;font-weight:800;margin:0">📄 Hoja de Vida del Equipo</h1>
+        <p style="font-size:11px;color:var(--text3);margin:0">${hdv.solId} · ${oc?.numeroOrden||hdv.ocKey}</p>
+      </div>
+    </div>
+
+    <!-- Contenido scrollable -->
+    <div style="flex:1;overflow-y:auto;padding:24px 28px">
+
+      ${readonlyBlock}
+
+      <!-- Panel de pestañas -->
+      <div style="background:var(--surface);border:1px solid var(--border);border-radius:14px;padding:22px 24px">
+        ${tabBar}
+        <div id="hdv-tab-content">
+          ${tabContent}
+        </div>
+      </div>
+
+      <!-- Botón guardar -->
+      <div style="margin-top:20px;display:flex;justify-content:center">
+        <button id="hdv-save-btn"
+          style="padding:14px 48px;background:linear-gradient(135deg,#2563eb,#1d4ed8);color:#fff;border:none;border-radius:12px;font-size:15px;font-weight:700;cursor:pointer;box-shadow:0 4px 16px #2563eb44;display:flex;align-items:center;gap:10px;font-family:inherit;transition:all .2s"
+          onmouseover="this.style.transform='translateY(-2px)';this.style.boxShadow='0 8px 24px #2563eb55'"
+          onmouseout="this.style.transform='';this.style.boxShadow='0 4px 16px #2563eb44'">
+          <span style="font-size:18px">💾</span>
+          Guardar y Generar Documentos
+        </button>
+      </div>
+
+    </div>`;
+}
+
+function hdvSaveCurrentTab(){
+  const hdv  = STATE.ticHdv;
+  if(!hdv) return;
+  const d    = hdv.data;
+  const g    = id => document.getElementById(id)?.value || '';
+
+  // General
+  d.nroInventario    = g('hdv_nroInventario');
+  d.fechaAdquisicion = g('hdv_fechaAdquisicion');
+  d.garantia         = g('hdv_garantia') || '1';
+  // Hardware
+  d.marca            = g('hdv_marca');
+  d.serial           = g('hdv_serial');
+  d.procesador       = g('hdv_procesador');
+  d.ram              = g('hdv_ram');
+  d.disco            = g('hdv_disco');
+  d.serialCargador   = g('hdv_serialCargador');
+  d.macWifi          = g('hdv_macWifi');
+  d.macEth           = g('hdv_macEth');
+  d.ipWifi           = g('hdv_ipWifi') || 'DHCP';
+  d.ipEth            = g('hdv_ipEth')  || 'DHCP';
+  d.hostname         = g('hdv_hostname');
+  d.dvd              = !!document.getElementById('hdv_dvd')?.checked;
+  d.tecladoExt       = !!document.getElementById('hdv_tecladoExt')?.checked;
+  d.mouseExt         = !!document.getElementById('hdv_mouseExt')?.checked;
+  // Software
+  d.software = [];
+  document.querySelectorAll('[data-sw]').forEach(cb => { if(cb.checked) d.software.push(cb.dataset.sw); });
+  d.softwareOtros    = g('hdv_softwareOtros');
+  // Cierre
+  d.estadoEquipo     = document.querySelector('[name="hdv_estadoEquipo"]:checked')?.value || d.estadoEquipo || 'Nuevo';
+  d.observaciones    = g('hdv_observaciones');
+}
+
+function hdvRecalcGarantia(){
+  const fecha  = document.getElementById('hdv_fechaAdquisicion')?.value;
+  const anos   = document.getElementById('hdv_garantia')?.value || '1';
+  const venc   = calcVencGarantia(fecha, anos);
+  const el     = document.getElementById('hdv_venc_text');
+  if(el){
+    el.textContent = fecha ? venc : '— Selecciona fecha y garantía —';
+    el.style.color = fecha ? '#34d399' : '#475569';
+  }
+  // Guardar en state sin re-render
+  if(STATE.ticHdv?.data){
+    STATE.ticHdv.data.fechaAdquisicion = fecha;
+    STATE.ticHdv.data.garantia = anos;
+  }
 }
 
 
